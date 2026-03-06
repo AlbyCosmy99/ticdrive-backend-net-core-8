@@ -1,5 +1,8 @@
 ﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
 using TicDrive.Context;
 
 namespace TicDrive.Services
@@ -15,6 +18,10 @@ namespace TicDrive.Services
     {
         private readonly string _senderEmail;
         private readonly string _resendApiKey;
+        private readonly string _smtpPassword;
+        private readonly string _smtpHost;
+        private readonly int _smtpPort;
+        private readonly string _mailProvider;
         private readonly HttpClient _httpClient;
         private readonly TicDriveDbContext _dbContext;
 
@@ -26,6 +33,17 @@ namespace TicDrive.Services
             _dbContext = dbContext;
             _senderEmail = config["EmailSettings:SenderEmail"] ?? string.Empty;
             _resendApiKey = config["EmailSettings:ResendApiKey"] ?? string.Empty;
+            _smtpPassword = config["EmailSettings:SmtpPassword"] ?? string.Empty;
+            _smtpHost = config["EmailSettings:SmtpHost"] ?? "smtp.gmail.com";
+            _smtpPort = int.TryParse(config["EmailSettings:SmtpPort"], out var port) ? port : 465;
+
+            var configured = (config["EmailSettings:MailProvider"] ?? string.Empty).ToLower();
+            _mailProvider = configured switch
+            {
+                "smtp" => "smtp",
+                "resend" => "resend",
+                _ => !string.IsNullOrWhiteSpace(_smtpPassword) ? "smtp" : "resend"
+            };
 
             _httpClient = httpClientFactory.CreateClient(nameof(EmailService));
             _httpClient.BaseAddress = new Uri("https://api.resend.com/");
@@ -33,6 +51,38 @@ namespace TicDrive.Services
         }
 
         public async Task SendEmailAsync(string to, string subject, string body)
+        {
+            if (_mailProvider == "smtp")
+            {
+                await SendViaSmtpAsync(to, subject, body);
+            }
+            else
+            {
+                await SendViaResendAsync(to, subject, body);
+            }
+        }
+
+        private async Task SendViaSmtpAsync(string to, string subject, string body)
+        {
+            if (string.IsNullOrWhiteSpace(_senderEmail) || string.IsNullOrWhiteSpace(_smtpPassword))
+            {
+                throw new InvalidOperationException("Missing EmailSettings:SenderEmail or EmailSettings:SmtpPassword configuration.");
+            }
+
+            var message = new MimeMessage();
+            message.From.Add(new MailboxAddress("TicDrive", _senderEmail));
+            message.To.Add(MailboxAddress.Parse(to));
+            message.Subject = subject;
+            message.Body = new TextPart("html") { Text = body };
+
+            using var client = new SmtpClient();
+            await client.ConnectAsync(_smtpHost, _smtpPort, SecureSocketOptions.SslOnConnect);
+            await client.AuthenticateAsync(_senderEmail, _smtpPassword);
+            await client.SendAsync(message);
+            await client.DisconnectAsync(true);
+        }
+
+        private async Task SendViaResendAsync(string to, string subject, string body)
         {
             if (string.IsNullOrWhiteSpace(_senderEmail))
             {
