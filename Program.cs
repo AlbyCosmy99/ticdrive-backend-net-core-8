@@ -102,6 +102,7 @@ builder.Services.AddDbContext<TicDriveDbContext>(options =>
 );
 
 builder.Services.AddAutoMapper(typeof(AutomapperConfig));
+builder.Services.AddHttpClient();
 
 builder.Services.AddSingleton(x =>
 {
@@ -137,8 +138,6 @@ builder.Services.AddRateLimiter(options =>
 var app = builder.Build();
 
 app.UseRateLimiter();
-app.MapControllers();
-
 app.UseCors("AllowAll");
 
 app.UseSwagger();
@@ -148,6 +147,8 @@ app.UseHttpsRedirection();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+app.MapControllers();
 
 app.Run();
 

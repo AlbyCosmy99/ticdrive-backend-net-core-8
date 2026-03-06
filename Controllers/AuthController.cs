@@ -545,7 +545,17 @@ namespace TicDrive.Controllers
                 <p>Questo codice è valido per 10 minuti.</p>
             </body>
             </html>";
-            await _emailService.SendEmailAsync(user.Email, "Codice di reimpostazione password", emailBody);
+            try
+            {
+                await _emailService.SendEmailAsync(user.Email, "Codice di reimpostazione password", emailBody);
+            }
+            catch
+            {
+                return StatusCode(503, new
+                {
+                    Message = "Non è stato possibile inviare l'email di reimpostazione. Riprova tra poco."
+                });
+            }
 
             return Ok(new { Message = "If an account with that email exists, you will receive instructions to reset your password." });
         }

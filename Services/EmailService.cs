@@ -1,10 +1,5 @@
-﻿using Azure.Core;
-using Azure.Identity;
-using MailKit.Net.Smtp;
-using Microsoft.Graph;
-using Microsoft.Graph.Models;
-using Microsoft.Graph.Users.Item.SendMail;
-using MimeKit;
+﻿using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using TicDrive.Context;
 
 namespace TicDrive.Services
@@ -19,30 +14,65 @@ namespace TicDrive.Services
     public class EmailService : IEmailService
     {
         private readonly string _senderEmail;
-        private readonly string _senderPassword;
+        private readonly string _resendApiKey;
+        private readonly HttpClient _httpClient;
         private readonly TicDriveDbContext _dbContext;
 
-        public EmailService(IConfiguration config, TicDriveDbContext dbContext)
+        public EmailService(
+            IConfiguration config,
+            TicDriveDbContext dbContext,
+            IHttpClientFactory httpClientFactory)
         {
             _dbContext = dbContext;
-            _senderEmail = config["EmailSettings:SenderEmail"]!;
-            _senderPassword = config["EmailSettings:SenderPassword"]!;
+            _senderEmail = config["EmailSettings:SenderEmail"] ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(_senderEmail))
+            {
+                throw new InvalidOperationException("Missing EmailSettings:SenderEmail configuration.");
+            }
+
+            _resendApiKey = config["EmailSettings:ResendApiKey"] ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(_resendApiKey))
+            {
+                throw new InvalidOperationException("Missing EmailSettings:ResendApiKey configuration.");
+            }
+
+            _httpClient = httpClientFactory.CreateClient(nameof(EmailService));
+            _httpClient.BaseAddress = new Uri("https://api.resend.com/");
+            _httpClient.Timeout = TimeSpan.FromSeconds(10);
         }
 
         public async Task SendEmailAsync(string to, string subject, string body)
         {
-            var message = new MimeMessage();
-            message.From.Add(new MailboxAddress("TicDrive", _senderEmail));
-            message.To.Add(new MailboxAddress(to, to));
-            message.Subject = subject;
+            using var request = new HttpRequestMessage(HttpMethod.Post, "emails");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _resendApiKey);
+            request.Content = JsonContent.Create(new
+            {
+                from = $"TicDrive <{_senderEmail}>",
+                to = new[] { to },
+                subject,
+                html = body
+            });
 
-            message.Body = new TextPart("html") { Text = body };
+            try
+            {
+                using var response = await _httpClient.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                {
+                    return;
+                }
 
-            using var client = new SmtpClient();
-            await client.ConnectAsync("smtp.gmail.com", 587, MailKit.Security.SecureSocketOptions.StartTls);
-            await client.AuthenticateAsync(_senderEmail, _senderPassword);
-            await client.SendAsync(message);
-            await client.DisconnectAsync(true);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                throw new InvalidOperationException(
+                    $"Resend rejected the email request with status {(int)response.StatusCode}: {responseBody}");
+            }
+            catch (TaskCanceledException ex)
+            {
+                throw new InvalidOperationException("Timed out while sending email with Resend.", ex);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new InvalidOperationException("Unable to reach Resend while sending email.", ex);
+            }
         }
 
         public bool IsEmailConfirmed(string? email)
