@@ -94,11 +94,14 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddScoped<IClaimsTransformation, UserClaimsMapper>();
 builder.Services.AddScoped<LoginLogger>();
 
-var connection = string.Empty;
-connection = Environment.GetEnvironmentVariable("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING");
+var connection =
+    Environment.GetEnvironmentVariable("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING")
+    ?? builder.Configuration.GetConnectionString("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING")
+    ?? throw new InvalidOperationException(
+        "Missing TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING configuration.");
 
 builder.Services.AddDbContext<TicDriveDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING"))
+    options.UseNpgsql(connection)
 );
 
 builder.Services.AddAutoMapper(typeof(AutomapperConfig));
