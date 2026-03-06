@@ -549,12 +549,11 @@ namespace TicDrive.Controllers
             {
                 await _emailService.SendEmailAsync(user.Email, "Codice di reimpostazione password", emailBody);
             }
-            catch (Exception ex)
+            catch
             {
                 return StatusCode(503, new
                 {
-                    Message = "Non è stato possibile inviare l'email di reimpostazione. Riprova tra poco.",
-                    Debug = ex.Message
+                    Message = "Non è stato possibile inviare l'email di reimpostazione. Riprova tra poco."
                 });
             }
 
