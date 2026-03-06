@@ -25,16 +25,7 @@ namespace TicDrive.Services
         {
             _dbContext = dbContext;
             _senderEmail = config["EmailSettings:SenderEmail"] ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(_senderEmail))
-            {
-                throw new InvalidOperationException("Missing EmailSettings:SenderEmail configuration.");
-            }
-
             _resendApiKey = config["EmailSettings:ResendApiKey"] ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(_resendApiKey))
-            {
-                throw new InvalidOperationException("Missing EmailSettings:ResendApiKey configuration.");
-            }
 
             _httpClient = httpClientFactory.CreateClient(nameof(EmailService));
             _httpClient.BaseAddress = new Uri("https://api.resend.com/");
@@ -43,6 +34,16 @@ namespace TicDrive.Services
 
         public async Task SendEmailAsync(string to, string subject, string body)
         {
+            if (string.IsNullOrWhiteSpace(_senderEmail))
+            {
+                throw new InvalidOperationException("Missing EmailSettings:SenderEmail configuration.");
+            }
+
+            if (string.IsNullOrWhiteSpace(_resendApiKey))
+            {
+                throw new InvalidOperationException("Missing EmailSettings:ResendApiKey configuration.");
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Post, "emails");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _resendApiKey);
             request.Content = JsonContent.Create(new
