@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi.Models;
 using TicDrive.Utils.Auth;
 using Azure.Storage.Blobs;
+using Npgsql;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -94,11 +95,7 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddScoped<IClaimsTransformation, UserClaimsMapper>();
 builder.Services.AddScoped<LoginLogger>();
 
-var connection =
-    Environment.GetEnvironmentVariable("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING")
-    ?? builder.Configuration.GetConnectionString("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING")
-    ?? throw new InvalidOperationException(
-        "Missing TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING configuration.");
+var connection = ResolvePostgresConnectionString(builder.Configuration, builder.Environment);
 
 builder.Services.AddDbContext<TicDriveDbContext>(options =>
     options.UseNpgsql(connection)
@@ -153,3 +150,88 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.Run();
+
+static string ResolvePostgresConnectionString(ConfigurationManager configuration, IWebHostEnvironment environment)
+{
+    var preferredVariableNames = environment.IsDevelopment()
+        ? new[]
+        {
+            "TICDRIVE_DEVELOPMENT_POSTGRESQL_CONNECTIONSTRING",
+            "TICDRIVE_DEVELOPMENT_DATABASE_URL"
+        }
+        : new[]
+        {
+            "TICDRIVE_PRODUCTION_POSTGRESQL_CONNECTIONSTRING",
+            "TICDRIVE_PRODUCTION_DATABASE_URL"
+        };
+
+    var fallbackVariableNames = new[]
+    {
+        "TICDRIVE_POSTGRESQL_CONNECTIONSTRING",
+        "TICDRIVE_DATABASE_URL",
+        "TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING",
+        "DATABASE_URL",
+        "DATABASE_PUBLIC_URL"
+    };
+
+    var rawConnectionString = preferredVariableNames
+        .Concat(fallbackVariableNames)
+        .Select(Environment.GetEnvironmentVariable)
+        .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
+        ?? configuration.GetConnectionString(environment.IsDevelopment()
+            ? "TICDRIVE_DEVELOPMENT_POSTGRESQL_CONNECTIONSTRING"
+            : "TICDRIVE_PRODUCTION_POSTGRESQL_CONNECTIONSTRING")
+        ?? configuration.GetConnectionString("TICDRIVE_RAILWAY_POSTGRESQL_CONNECTIONSTRING")
+        ?? throw new InvalidOperationException(
+            "Missing PostgreSQL connection string. Configure a Railway DB env var for the active environment.");
+
+    return NormalizePostgresConnectionString(rawConnectionString);
+}
+
+static string NormalizePostgresConnectionString(string rawConnectionString)
+{
+    if (!Uri.TryCreate(rawConnectionString, UriKind.Absolute, out var uri) ||
+        (uri.Scheme != "postgres" && uri.Scheme != "postgresql"))
+    {
+        return rawConnectionString;
+    }
+
+    var userInfoParts = uri.UserInfo.Split(':', 2);
+
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Username = userInfoParts.Length > 0 ? Uri.UnescapeDataString(userInfoParts[0]) : string.Empty,
+        Password = userInfoParts.Length > 1 ? Uri.UnescapeDataString(userInfoParts[1]) : string.Empty,
+        Database = uri.AbsolutePath.Trim('/'),
+        SslMode = SslMode.Require,
+        TrustServerCertificate = true
+    };
+
+    foreach (var segment in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+    {
+        var pair = segment.Split('=', 2);
+        var key = Uri.UnescapeDataString(pair[0]).ToLowerInvariant();
+        var value = pair.Length > 1 ? Uri.UnescapeDataString(pair[1]) : string.Empty;
+
+        switch (key)
+        {
+            case "sslmode":
+                if (Enum.TryParse<SslMode>(value, true, out var sslMode))
+                {
+                    builder.SslMode = sslMode;
+                }
+                break;
+            case "trustservercertificate":
+            case "trust_server_certificate":
+                if (bool.TryParse(value, out var trustServerCertificate))
+                {
+                    builder.TrustServerCertificate = trustServerCertificate;
+                }
+                break;
+        }
+    }
+
+    return builder.ConnectionString;
+}
